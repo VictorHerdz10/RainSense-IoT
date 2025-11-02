@@ -288,7 +288,6 @@ Distribuido bajo licencia MIT. Ver `LICENSE` para más información.
 - Comunidad de Arduino por el ecosistema
 - Desarrolladores de las librerías utilizadas
 - Contribuidores de código abierto
-- Universidad Autónoma de Campeche por el apoyo académico
 
 ---
 
@@ -300,4 +299,3 @@ Abre un [issue](https://github.com/VictorHerdz10/RainSense-IoT/issues) o contác
 ⭐ **¡Dale una estrella al repo si te fue útil!**
 
 </div>
-```
