@@ -122,7 +122,7 @@ Arduino Uno    →   DHT22    →   BMP280    →   Ethernet Shield
 │              │            │             │
 GND            GND          GND           GND  
 5V             VCC          VCC           5V
-Pin 7          DATA         -              -
+Pin 7          SDA         -              -
 Pin A4         -            SDA            -
 Pin A5         -            SCL            -
 Pin 10         -            -              CS
