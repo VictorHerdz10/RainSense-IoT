@@ -237,10 +237,10 @@ public:
         }
         
         if (http_code >= 200 && http_code < 300) {
-            Serial.println("✅ Datos enviados correctamente al backend");
+            Serial.println("Datos enviados correctamente al backend");
             return true;
         } else {
-            Serial.println("❌ Error en respuesta del servidor");
+            Serial.println("Error en respuesta del servidor");
             return false;
         }
     }
@@ -475,9 +475,9 @@ int main() {
             bool exito = httpBackend.sendData(temp_redondeada, hum_redondeada, pres_redondeada, alerta);
             
             if (exito) {
-                Serial.println("✅ Envio exitoso a la API");
+                Serial.println("Envio exitoso a la API");
             } else {
-                Serial.println("❌ Fallo en el envio a la API");
+                Serial.println(" Fallo en el envio a la API");
             }
             
             Serial.println("------------------------------------");
