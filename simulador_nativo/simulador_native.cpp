@@ -6,22 +6,45 @@
 #include <chrono>
 #include <vector>
 #include <cmath>
-// Nuevas librerías para conexión HTTP
-#include <curl/curl.h> // si no las encuentra intalarlas en el sistema Utilice MSYS2 MinGW 64-bit  
-#include <json/json.h>//  comandos pacman -Syu  # Actualiza primero  pacman -S mingw-w64-x86_64-curl pacman -S mingw-w64-x86_64-jsoncpp
+#include <iomanip>
+#include <sstream>
+#include <curl/curl.h>
+#include <json/json.h>
 
 using namespace std;
 
 // ======================
 // CONFIGURACION
 // ======================
-const unsigned long INTERVALO_LECTURA = 5000;    // 5 segundos
-const unsigned long INTERVALO_FILTRADO = 30000;  // 30 segundos
-const unsigned long INTERVALO_ENVIO = 60000;     // 1 minuto
+const unsigned long INTERVALO_LECTURA = 5000;
+const unsigned long INTERVALO_FILTRADO = 30000;
+const unsigned long INTERVALO_ENVIO = 60000;
 
 // Configuración de la API
-const string API_URL = "http://localhost:4000/api/sensores";  // Cambia esto por tu URL real
-const string API_KEY = "tu-api-key-aqui";  // Si tu API requiere autenticación
+const string API_URL = "http://localhost:4000/api/sensores";
+const string API_KEY = "tu-api-key-aqui";
+
+// ======================
+// FUNCIONES UTILITARIAS MEJORADAS
+// ======================
+// Función para obtener timestamp UNIX en MILISEGUNDOS
+unsigned long long getUnixTimestampMillis() {
+    auto now = chrono::system_clock::now();
+    auto duration = now.time_since_epoch();
+    return chrono::duration_cast<chrono::milliseconds>(duration).count();
+}
+
+// Función para redondear a 2 decimales
+float roundToTwoDecimals(float value) {
+    return roundf(value * 100.0f) / 100.0f;
+}
+
+// Función para formatear float con precisión (para display)
+string formatFloat(float value, int precision = 2) {
+    stringstream ss;
+    ss << fixed << setprecision(precision) << value;
+    return ss.str();
+}
 
 // ======================
 // SIMULACION DE ARDUINO
@@ -43,10 +66,25 @@ public:
     }
     void println(const string& msg) { cout << msg << endl; }
     void print(const string& msg) { cout << msg; }
-    void println(float value) { cout << value << endl; }
-    void print(float value) { cout << value; }
+    void println(float value) { 
+        cout << fixed << setprecision(2) << value << endl;
+        cout.unsetf(ios::fixed);
+    }
+    void print(float value) { 
+        cout << fixed << setprecision(2) << value;
+        cout.unsetf(ios::fixed);
+    }
     void println(int value) { cout << value << endl; }
     void print(int value) { cout << value; }
+    // Nuevo método para imprimir float con precisión personalizada
+    void print(float value, int precision) { 
+        cout << fixed << setprecision(precision) << value;
+        cout.unsetf(ios::fixed);
+    }
+    void println(float value, int precision) { 
+        cout << fixed << setprecision(precision) << value << endl;
+        cout.unsetf(ios::fixed);
+    }
 };
 
 SerialClass Serial;
@@ -77,7 +115,7 @@ size_t WriteCallback(void* contents, size_t size, size_t nmemb, string* response
 }
 
 // ======================
-// CLASE HttpClientBackend MODIFICADA
+// CLASE HttpClientBackend CORREGIDA
 // ======================
 class HttpClientBackend {
 private:
@@ -108,22 +146,40 @@ public:
             return false;
         }
         
-        // Crear JSON para enviar
+        // REDONDEAR VALORES A 2 DECIMALES
+        float temp_rounded = roundToTwoDecimals(temperatura);
+        float hum_rounded = roundToTwoDecimals(humedad);
+        float pres_rounded = roundToTwoDecimals(presion);
+        
+        // Crear JSON con valores redondeados y timestamp en MILISEGUNDOS
         Json::Value jsonData;
         jsonData["sensor_id"] = "ARDUINO_TROPICAL_01";
-        jsonData["timestamp"] = static_cast<Json::Int64>(millis());
-        jsonData["temperatura"] = temperatura;
-        jsonData["humedad"] = humedad;
-        jsonData["presion"] = presion;
+        jsonData["timestamp"] = static_cast<Json::Int64>(getUnixTimestampMillis()); // MILISEGUNDOS
+        jsonData["temperatura"] = temp_rounded;
+        jsonData["humedad"] = hum_rounded;
+        jsonData["presion"] = pres_rounded;
         jsonData["alerta"] = alerta;
         jsonData["modo"] = "simulacion_nativo";
         
-        // Convertir JSON a string
+        // Convertir JSON a string con indentación
         Json::StreamWriterBuilder writer;
+        writer["indentation"] = "  ";
         string jsonString = Json::writeString(writer, jsonData);
         
+        // Mostrar información en consola - CORREGIDO
         Serial.println("ENVIANDO A API REAL:");
         Serial.println("URL: " + API_URL);
+        Serial.println("TIMESTAMP (ms): " + to_string(getUnixTimestampMillis()));
+        
+        // Mostrar datos redondeados usando el nuevo método
+        Serial.print("DATOS REDONDEADOS: T=");
+        Serial.print(temp_rounded, 2);  // Ahora funciona con el nuevo método
+        Serial.print("°C, H=");
+        Serial.print(hum_rounded, 2);   // Ahora funciona con el nuevo método
+        Serial.print("%, P=");
+        Serial.print(pres_rounded, 2);  // Ahora funciona con el nuevo método
+        Serial.println(" hPa");
+        
         Serial.println("JSON: " + jsonString);
         
         // Configurar la solicitud HTTP
@@ -138,18 +194,15 @@ public:
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &responseBuffer);
-        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L); // 10 segundos timeout
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
         
-        // Limpiar buffer de respuesta anterior
         responseBuffer.clear();
         
         // Realizar la solicitud
         CURLcode res = curl_easy_perform(curl);
         
-        // Limpiar headers
         curl_slist_free_all(headers);
         
-        // Verificar resultado
         if (res != CURLE_OK) {
             Serial.println("ERROR en envio HTTP: " + string(curl_easy_strerror(res)));
             return false;
@@ -160,20 +213,41 @@ public:
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
         
         Serial.println("Respuesta HTTP: " + to_string(http_code));
-        Serial.println("Body respuesta: " + responseBuffer);
+        
+        // Formatear respuesta JSON
+        if (!responseBuffer.empty()) {
+            try {
+                Json::Value jsonResponse;
+                Json::CharReaderBuilder readerBuilder;
+                string errors;
+                stringstream responseStream(responseBuffer);
+                
+                if (Json::parseFromStream(readerBuilder, responseStream, &jsonResponse, &errors)) {
+                    Json::StreamWriterBuilder responseWriter;
+                    responseWriter["indentation"] = "  ";
+                    string formattedResponse = Json::writeString(responseWriter, jsonResponse);
+                    Serial.println("Body respuesta (formateado):");
+                    Serial.println(formattedResponse);
+                } else {
+                    Serial.println("Body respuesta: " + responseBuffer);
+                }
+            } catch (...) {
+                Serial.println("Body respuesta: " + responseBuffer);
+            }
+        }
         
         if (http_code >= 200 && http_code < 300) {
-            Serial.println(" Datos enviados correctamente al backend");
+            Serial.println("✅ Datos enviados correctamente al backend");
             return true;
         } else {
-            Serial.println(" Error en respuesta del servidor");
+            Serial.println("❌ Error en respuesta del servidor");
             return false;
         }
     }
 };
 
 // ======================
-// CLASE SensorController (SIMULACION) - SIN CAMBIOS
+// CLASE SensorController
 // ======================
 class SensorController {
 public:
@@ -213,7 +287,7 @@ public:
 };
 
 // ======================
-// CLASE DataFilter (SIMULACION) - SIN CAMBIOS
+// CLASE DataFilter
 // ======================
 class DataFilter {
 private:
@@ -306,7 +380,7 @@ public:
 };
 
 // ======================
-// CLASE PredictionEngine (SIMULACION) - SIN CAMBIOS
+// CLASE PredictionEngine
 // ======================
 class PredictionEngine {
 public:
@@ -392,14 +466,18 @@ int main() {
             int alerta = predictionEngine.predict(datosFiltrados.temperatura, datosFiltrados.humedad, 
                                                 datosFiltrados.presion, tendenciaHumedad, tendenciaPresion);
             
+            // Redondear los datos ANTES de enviar
+            float temp_redondeada = roundToTwoDecimals(datosFiltrados.temperatura);
+            float hum_redondeada = roundToTwoDecimals(datosFiltrados.humedad);
+            float pres_redondeada = roundToTwoDecimals(datosFiltrados.presion);
+            
             // Ahora envía a la API real
-            bool exito = httpBackend.sendData(datosFiltrados.temperatura, datosFiltrados.humedad, 
-                                            datosFiltrados.presion, alerta);
+            bool exito = httpBackend.sendData(temp_redondeada, hum_redondeada, pres_redondeada, alerta);
             
             if (exito) {
-                Serial.println("Envio exitoso a la API");
+                Serial.println("✅ Envio exitoso a la API");
             } else {
-                Serial.println("Fallo en el envio a la API");
+                Serial.println("❌ Fallo en el envio a la API");
             }
             
             Serial.println("------------------------------------");
@@ -413,6 +491,9 @@ int main() {
     Serial.println("MODO SIMULACION CON API REAL");
     Serial.println("====================================");
     Serial.println("API destino: " + API_URL);
+    Serial.println("Precisión: 2 decimales");
+    Serial.println("Timestamp: UNIX en milisegundos");
+    Serial.println("====================================");
 
     sensorController.begin();
     httpBackend.begin();
