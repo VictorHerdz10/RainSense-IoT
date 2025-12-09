@@ -6,6 +6,9 @@
 #include <chrono>
 #include <vector>
 #include <cmath>
+// Nuevas librerías para conexión HTTP
+#include <curl/curl.h> // si no las encuentra intalarlas en el sistema Utilice MSYS2 MinGW 64-bit  
+#include <json/json.h>//  comandos pacman -Syu  # Actualiza primero  pacman -S mingw-w64-x86_64-curl pacman -S mingw-w64-x86_64-jsoncpp
 
 using namespace std;
 
@@ -15,6 +18,10 @@ using namespace std;
 const unsigned long INTERVALO_LECTURA = 5000;    // 5 segundos
 const unsigned long INTERVALO_FILTRADO = 30000;  // 30 segundos
 const unsigned long INTERVALO_ENVIO = 60000;     // 1 minuto
+
+// Configuración de la API
+const string API_URL = "http://localhost:4000/api/sensores";  // Cambia esto por tu URL real
+const string API_KEY = "tu-api-key-aqui";  // Si tu API requiere autenticación
 
 // ======================
 // SIMULACION DE ARDUINO
@@ -61,7 +68,112 @@ struct FilteredData {
 };
 
 // ======================
-// CLASE SensorController (SIMULACION)
+// FUNCIÓN DE CALLBACK PARA CURL
+// ======================
+size_t WriteCallback(void* contents, size_t size, size_t nmemb, string* response) {
+    size_t totalSize = size * nmemb;
+    response->append((char*)contents, totalSize);
+    return totalSize;
+}
+
+// ======================
+// CLASE HttpClientBackend MODIFICADA
+// ======================
+class HttpClientBackend {
+private:
+    CURL* curl;
+    string responseBuffer;
+    
+public:
+    void begin() {
+        curl_global_init(CURL_GLOBAL_DEFAULT);
+        curl = curl_easy_init();
+        if (curl) {
+            Serial.println("HttpClientBackend inicializado (conexion real)");
+        } else {
+            Serial.println("ERROR: No se pudo inicializar CURL");
+        }
+    }
+    
+    ~HttpClientBackend() {
+        if (curl) {
+            curl_easy_cleanup(curl);
+        }
+        curl_global_cleanup();
+    }
+
+    bool sendData(float temperatura, float humedad, float presion, int alerta) {
+        if (!curl) {
+            Serial.println("ERROR: CURL no inicializado");
+            return false;
+        }
+        
+        // Crear JSON para enviar
+        Json::Value jsonData;
+        jsonData["sensor_id"] = "ARDUINO_TROPICAL_01";
+        jsonData["timestamp"] = static_cast<Json::Int64>(millis());
+        jsonData["temperatura"] = temperatura;
+        jsonData["humedad"] = humedad;
+        jsonData["presion"] = presion;
+        jsonData["alerta"] = alerta;
+        jsonData["modo"] = "simulacion_nativo";
+        
+        // Convertir JSON a string
+        Json::StreamWriterBuilder writer;
+        string jsonString = Json::writeString(writer, jsonData);
+        
+        Serial.println("ENVIANDO A API REAL:");
+        Serial.println("URL: " + API_URL);
+        Serial.println("JSON: " + jsonString);
+        
+        // Configurar la solicitud HTTP
+        struct curl_slist* headers = NULL;
+        headers = curl_slist_append(headers, "Content-Type: application/json");
+        headers = curl_slist_append(headers, ("X-API-Key: " + API_KEY).c_str());
+        
+        curl_easy_setopt(curl, CURLOPT_URL, API_URL.c_str());
+        curl_easy_setopt(curl, CURLOPT_POST, 1L);
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, jsonString.c_str());
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, jsonString.length());
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &responseBuffer);
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L); // 10 segundos timeout
+        
+        // Limpiar buffer de respuesta anterior
+        responseBuffer.clear();
+        
+        // Realizar la solicitud
+        CURLcode res = curl_easy_perform(curl);
+        
+        // Limpiar headers
+        curl_slist_free_all(headers);
+        
+        // Verificar resultado
+        if (res != CURLE_OK) {
+            Serial.println("ERROR en envio HTTP: " + string(curl_easy_strerror(res)));
+            return false;
+        }
+        
+        // Obtener código de respuesta HTTP
+        long http_code = 0;
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+        
+        Serial.println("Respuesta HTTP: " + to_string(http_code));
+        Serial.println("Body respuesta: " + responseBuffer);
+        
+        if (http_code >= 200 && http_code < 300) {
+            Serial.println(" Datos enviados correctamente al backend");
+            return true;
+        } else {
+            Serial.println(" Error en respuesta del servidor");
+            return false;
+        }
+    }
+};
+
+// ======================
+// CLASE SensorController (SIMULACION) - SIN CAMBIOS
 // ======================
 class SensorController {
 public:
@@ -73,23 +185,20 @@ public:
         SensorData data;
         data.timestamp = millis();
         
-        // Generar datos simulados con patrones realistas para lluvia
-        // Simular correlacion entre variables meteorologicas
-        float baseHumedad = 40 + (rand() % 6000) / 100.0;  // 40.0 - 100.0%
+        float baseHumedad = 40 + (rand() % 6000) / 100.0;
         
-        // Cuando la humedad es alta, la presion tiende a bajar y la temperatura a disminuir
         if (baseHumedad > 80) {
-            data.presion = 1000.0 + (rand() % 1500) / 100.0;  // 1000.0 - 1015.0 hPa (baja presion)
-            data.temperatura = 18.0 + (rand() % 1500) / 100.0; // 18.0 - 33.0°C (mas fresco)
+            data.presion = 1000.0 + (rand() % 1500) / 100.0;
+            data.temperatura = 18.0 + (rand() % 1500) / 100.0;
         } else if (baseHumedad > 60) {
-            data.presion = 1010.0 + (rand() % 1500) / 100.0;  // 1010.0 - 1025.0 hPa
-            data.temperatura = 22.0 + (rand() % 1800) / 100.0; // 22.0 - 40.0°C
+            data.presion = 1010.0 + (rand() % 1500) / 100.0;
+            data.temperatura = 22.0 + (rand() % 1800) / 100.0;
         } else {
-            data.presion = 1015.0 + (rand() % 1500) / 100.0;  // 1015.0 - 1030.0 hPa (alta presion)
-            data.temperatura = 25.0 + (rand() % 2000) / 100.0; // 25.0 - 45.0°C (mas calido)
+            data.presion = 1015.0 + (rand() % 1500) / 100.0;
+            data.temperatura = 25.0 + (rand() % 2000) / 100.0;
         }
         
-        data.humedad = max(30.0f, min(100.0f, baseHumedad)); // Limitar entre 30-100%
+        data.humedad = max(30.0f, min(100.0f, baseHumedad));
         
         Serial.print("SIMULACION - T:");
         Serial.print(data.temperatura);
@@ -104,7 +213,7 @@ public:
 };
 
 // ======================
-// CLASE DataFilter (SIMULACION)
+// CLASE DataFilter (SIMULACION) - SIN CAMBIOS
 // ======================
 class DataFilter {
 private:
@@ -119,7 +228,6 @@ public:
         historialHumedad.push_back(hum);
         historialPresion.push_back(pres);
         
-        // Mantener solo los ultimos MAX_HISTORIAL valores
         if (historialTemperatura.size() > MAX_HISTORIAL) {
             historialTemperatura.erase(historialTemperatura.begin());
             historialHumedad.erase(historialHumedad.begin());
@@ -159,7 +267,6 @@ public:
     float calculateHumidityTrend() {
         if (historialHumedad.size() < 2) return 0;
         
-        // Calcular tendencia real basada en datos historicos
         float sumaX = 0, sumaY = 0, sumaXY = 0, sumaX2 = 0;
         int n = historialHumedad.size();
         
@@ -180,7 +287,6 @@ public:
     float calculatePressureTrend() {
         if (historialPresion.size() < 2) return 0;
         
-        // Calcular tendencia de presion
         float sumaX = 0, sumaY = 0, sumaXY = 0, sumaX2 = 0;
         int n = historialPresion.size();
         
@@ -200,7 +306,7 @@ public:
 };
 
 // ======================
-// CLASE PredictionEngine (SIMULACION)
+// CLASE PredictionEngine (SIMULACION) - SIN CAMBIOS
 // ======================
 class PredictionEngine {
 public:
@@ -208,37 +314,29 @@ public:
         int nivelAlerta = 0;
         int puntosRiesgo = 0;
 
-        // ANALISIS MULTIVARIABLE PARA PREDICCION DE LLUVIA
-        
-        // Factor 1: Humedad alta
         if (humedad > 85) puntosRiesgo += 3;
         else if (humedad > 75) puntosRiesgo += 2;
         else if (humedad > 65) puntosRiesgo += 1;
 
-        // Factor 2: Presion baja (señal de sistema meteorologico inestable)
         if (presion < 1005) puntosRiesgo += 3;
         else if (presion < 1010) puntosRiesgo += 2;
         else if (presion < 1015) puntosRiesgo += 1;
 
-        // Factor 3: Tendencia de humedad creciente
         if (tendenciaHumedad > 0.4) puntosRiesgo += 2;
         else if (tendenciaHumedad > 0.2) puntosRiesgo += 1;
 
-        // Factor 4: Tendencia de presion decreciente (muy importante)
         if (tendenciaPresion < -0.3) puntosRiesgo += 3;
         else if (tendenciaPresion < -0.1) puntosRiesgo += 2;
 
-        // Factor 5: Temperatura estable o descendiendo
-        if (temperatura < 25) puntosRiesgo += 1;  // Temperaturas bajas favorecen condensacion
+        if (temperatura < 25) puntosRiesgo += 1;
 
-        // EVALUACION FINAL DE RIESGO
         if (puntosRiesgo >= 8 || (humedad > 90 && presion < 1010)) {
             nivelAlerta = 2;
-            Serial.println("PREDICCION: ALERTA ROJA - Lluvia inminente (Condiciones optimas)");
+            Serial.println("PREDICCION: ALERTA ROJA - Lluvia inminente");
         }
         else if (puntosRiesgo >= 5) {
             nivelAlerta = 1;
-            Serial.println("PREDICCION: ALERTA AMARILLA - Posible lluvia (Condiciones favorables)");
+            Serial.println("PREDICCION: ALERTA AMARILLA - Posible lluvia");
         }
         else {
             nivelAlerta = 0;
@@ -249,37 +347,6 @@ public:
         Serial.println(puntosRiesgo);
 
         return nivelAlerta;
-    }
-};
-
-// ======================
-// CLASE HttpClientBackend (SIMULACION)
-// ======================
-class HttpClientBackend {
-public:
-    void begin() {
-        Serial.println("HttpClientBackend inicializado (simulacion)");
-    }
-
-    bool sendData(float temperatura, float humedad, float presion, int alerta) {
-        Serial.println("ENVIANDO AL BACKEND:");
-        
-        // Simular JSON
-        cout << "{" << endl;
-        cout << "  \"sensor_id\": \"ARDUINO_TROPICAL_01\"," << endl;
-        cout << "  \"timestamp\": " << millis() << "," << endl;
-        cout << "  \"temperatura\": " << temperatura << "," << endl;
-        cout << "  \"humedad\": " << humedad << "," << endl;
-        cout << "  \"presion\": " << presion << "," << endl;
-        cout << "  \"alerta\": " << alerta << "," << endl;
-        cout << "  \"modo\": \"simulacion\"" << endl;
-        cout << "}" << endl;
-        
-        Serial.println("(Modo simulacion - envio simulado)");
-        Serial.println("Datos enviados correctamente");
-        Serial.println("------------------------------------");
-        
-        return true;
     }
 };
 
@@ -324,8 +391,18 @@ int main() {
             float tendenciaPresion = dataFilter.calculatePressureTrend();
             int alerta = predictionEngine.predict(datosFiltrados.temperatura, datosFiltrados.humedad, 
                                                 datosFiltrados.presion, tendenciaHumedad, tendenciaPresion);
-            httpBackend.sendData(datosFiltrados.temperatura, datosFiltrados.humedad, 
-                               datosFiltrados.presion, alerta);
+            
+            // Ahora envía a la API real
+            bool exito = httpBackend.sendData(datosFiltrados.temperatura, datosFiltrados.humedad, 
+                                            datosFiltrados.presion, alerta);
+            
+            if (exito) {
+                Serial.println("Envio exitoso a la API");
+            } else {
+                Serial.println("Fallo en el envio a la API");
+            }
+            
+            Serial.println("------------------------------------");
         }
     };
 
@@ -333,8 +410,9 @@ int main() {
     Serial.begin(9600);
     
     Serial.println("====================================");
-    Serial.println("MODO SIMULACION NATIVO ACTIVADO");
+    Serial.println("MODO SIMULACION CON API REAL");
     Serial.println("====================================");
+    Serial.println("API destino: " + API_URL);
 
     sensorController.begin();
     httpBackend.begin();
@@ -343,19 +421,16 @@ int main() {
     while (true) {
         unsigned long tiempoActual = millis();
         
-        // 1. LECTURA DE SENSORES (cada 5 segundos)
         if (tiempoActual - ultimaLectura >= INTERVALO_LECTURA) {
             ultimaLectura = tiempoActual;
             leerSensores();
         }
         
-        // 2. FILTRADO DE DATOS (cada 30 segundos)
         if (tiempoActual - ultimoFiltrado >= INTERVALO_FILTRADO) {
             ultimoFiltrado = tiempoActual;
             filtrarDatos();
         }
         
-        // 3. ENVIO AL BACKEND (cada 60 segundos)
         if (tiempoActual - ultimoEnvio >= INTERVALO_ENVIO) {
             ultimoEnvio = tiempoActual;
             enviarAlBackend();
